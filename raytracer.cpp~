@@ -28,8 +28,10 @@
 #include <vector>
 #include <iostream>
 #include <cassert>
+#include <chrono>
 #include <thread>
 #include <mpi.h>
+#include <atomic>
 
 #if defined __linux__ || defined __APPLE__
 // "Compiled for Linux
@@ -226,23 +228,9 @@ void render(const std::vector<Sphere> &spheres)
     float fov = 30, aspectratio = width / float(height);
     float angle = tan(M_PI * 0.5 * fov / 180.);
 
-    /* code original
-    // Trace rays
-    for (unsigned y = 0; y < height; ++y) {
-        for (unsigned x = 0; x < width; ++x, ++pixel) {
-            float xx = (2 * ((x + 0.5) * invWidth) - 1) * angle * aspectratio;
-            float yy = (1 - 2 * ((y + 0.5) * invHeight)) * angle;
-            Vec3f raydir(xx, yy, -1);
-            raydir.normalize();
-            *pixel = trace(Vec3f(0), raydir, spheres, 0);
-        }
-    }
-    end code original */
-
-
     // changes start here ---------------------------------------------------------------------
     int numtasks, rank, provided;
-    MPI_Init_thread(0, 0, MPI_THREAD_SERIALIZED, &provided);
+    MPI_Init_thread(0, 0, MPI_THREAD_MULTIPLE, &provided);
     MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);	
     MPI_Status status;
@@ -251,44 +239,33 @@ void render(const std::vector<Sphere> &spheres)
     if (rank == 0){
 		int recv = 0;
     		int i_row = 0;
-		//printf("%d\n", numtasks);
 		int p = 1;
 		for ( ; p < numtasks; ++p, i_row++){
-	    		MPI_Send(&i_row, 1, MPI_INT, p, 0, MPI_COMM_WORLD);
-			//printf("rank 0 enviou linha %d\n", i_row);	
+	    		MPI_Send(&i_row, 1, MPI_INT, p, 101, MPI_COMM_WORLD);
 		}
-		//printf("passou primeiro loop\n");
 		std::vector<float> row_pixels(3*width);
 		Vec3f aux;
 		while(i_row < height){
 		    MPI_Recv(row_pixels.data(), 3*width, MPI_FLOAT, MPI_ANY_SOURCE, 
 	                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-		    //printf("recebeu alguma coisa\n");	
 		    recv++;
 	            for ( int j = 0; j < 3*width; j+=3, pixel++ ){
 		        aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
 	            	*pixel = aux;
 		    }
-	            MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
-		    //printf("rank 0 enviou linha %d\n", i_row);
+	            MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
 	            i_row++;
 		}
-		//printf("passou segundo loop\n");
-		//int p = 1;
 		while (recv < height){
-		    //printf("aqui3\n");
 		    MPI_Recv(row_pixels.data(), 3*width, MPI_FLOAT, MPI_ANY_SOURCE, 
 	                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 		    recv++;
-	            //int row = row_pixels[3*width];
 	            for ( int j = 0; j < 3*width; j+=3, ++pixel ){
 	                aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
 	                *pixel = aux;
 		    }
-	            MPI_Send(&height, 1, MPI_INT, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
-	            //++p;
+	            MPI_Send(&height, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
 		}
-		//printf("acabou de receber\n");
 	
 	    // Save result to a PPM image (keep these flags if you compile under Windows)
 	    std::ofstream ofs("./untitled.ppm", std::ios::out | std::ios::binary);
@@ -303,21 +280,36 @@ void render(const std::vector<Sphere> &spheres)
 
     }else{
         std::vector<float> row_pixel(3*width);
-        //
         int irow = 0;
-	//printf("escravo n: %d", rank);
-        while (MPI_Recv(&irow, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status ), (irow < height)) {
-                for ( int j = 0; j < width; j++) {
-		    float xx = (2 * ((j + 0.5) * invWidth) - 1) * angle * aspectratio;
-            	    float yy = (1 - 2 * ((irow + 0.5) * invHeight)) * angle;
-                    Vec3f raydir(xx, yy, -1);
-            	    raydir.normalize();
-		    Vec3f res = trace(Vec3f(0), raydir, spheres, 0);
-            	    row_pixel[3*j] = res.x;
-		    row_pixel[(3*j)+1] = res.y;
-		    row_pixel[(3*j)+2] = res.z;
-                }
-		//printf("rank %d enviou dados\n", rank);
+        while (MPI_Recv(&irow, 1, MPI_INT, 0, 101, MPI_COMM_WORLD, &status ), (irow < height)) {
+
+		int num_cpus = std::thread::hardware_concurrency();
+		std::vector<std::thread> threads; 
+		threads.reserve(num_cpus);
+		int sz = width / num_cpus;
+		int rest = width % num_cpus;
+		if (rest > 0) sz += 1;
+		auto compute = [width, height, invWidth, invHeight, angle, aspectratio, spheres, &row_pixel, irow] (int start, int size) -> void {
+					for (int j = start; j < start + size; ++j){
+					    float xx = (2 * ((j + 0.5) * invWidth) - 1) * angle * aspectratio;
+				    	    float yy = (1 - 2 * ((irow + 0.5) * invHeight)) * angle;
+					    Vec3f raydir(xx, yy, -1);
+				    	    raydir.normalize();
+					    Vec3f res = trace(Vec3f(0), raydir, spheres, 0);
+					    //maybe as j is already atomic this wont be a prolem, should check later
+				    	    row_pixel[3*j] = res.x;
+					    row_pixel[(3*j)+1] = res.y;
+					    row_pixel[(3*j)+2] = res.z;
+					}
+				};
+		int s = 0;
+		for (int p = 0; p < num_cpus; ++p){
+			int size = ( p >= rest ? sz : sz - 1);
+			threads.push_back(std::thread(compute, s, size));
+			s += size;
+		}
+		for (auto& t : threads) t.join();
+
                 MPI_Send(row_pixel.data(), 3*width, MPI_FLOAT, 0, 101, MPI_COMM_WORLD);
         }
     } 
@@ -339,6 +331,20 @@ void render(const std::vector<Sphere> &spheres)
     }
 
     for ( auto& t : threads ) t.join();
+
+    auto iterate  = [&genNorm,&genAngle,maxIter,&iSample, width, height, &image](){
+    	while(iSample>0) {
+	    std::complex<float> c = std::polar( genNorm(), genAngle() );		      
+	    Complex c0{c.real(),c.imag()};
+	    if ( test_mandelbrot_divergent( maxIter, c0 ) == true ) {
+	    	// Calcul de l'orbite si la suite diverge :
+		comp_mandelbrot_orbit( maxIter, c0, width, height, image );
+		--iSample;
+	    } 
+	}
+    };
+
+
     // ending local parallelism
 */
 
@@ -346,22 +352,6 @@ void render(const std::vector<Sphere> &spheres)
 
    // for(unsigned y = nloc*rank; i < ((nloc*rank)+nloc); i++)
     // changes end here ---------------------------------------------------------------------
-
-
-
-    //for ()
-/*
-    // Save result to a PPM image (keep these flags if you compile under Windows)
-    std::ofstream ofs("./untitled.ppm", std::ios::out | std::ios::binary);
-    ofs << "P6\n" << width << " " << height << "\n255\n";
-    for (int i = 0; i < width * height; ++i) {
-        ofs << (unsigned char)(std::min(float(1), image[i].x) * 255) <<
-               (unsigned char)(std::min(float(1), image[i].y) * 255) <<
-               (unsigned char)(std::min(float(1), image[i].z) * 255);
-    }
-    ofs.close();
-    delete [] image;
-*/
 }
 
 //[comment]
