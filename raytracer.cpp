@@ -28,8 +28,10 @@
 #include <vector>
 #include <iostream>
 #include <cassert>
+#include <chrono>
 #include <thread>
 #include <mpi.h>
+#include <atomic>
 
 #if defined __linux__ || defined __APPLE__
 // "Compiled for Linux
@@ -228,7 +230,7 @@ void render(const std::vector<Sphere> &spheres)
 
     // changes start here ---------------------------------------------------------------------
     int numtasks, rank, provided;
-    MPI_Init_thread(0, 0, MPI_THREAD_SERIALIZED, &provided);
+    MPI_Init_thread(0, 0, MPI_THREAD_MULTIPLE, &provided);
     MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);	
     MPI_Status status;
@@ -239,7 +241,7 @@ void render(const std::vector<Sphere> &spheres)
     		int i_row = 0;
 		int p = 1;
 		for ( ; p < numtasks; ++p, i_row++){
-	    		MPI_Send(&i_row, 1, MPI_INT, p, 0, MPI_COMM_WORLD);
+	    		MPI_Send(&i_row, 1, MPI_INT, p, 101, MPI_COMM_WORLD);
 		}
 		std::vector<float> row_pixels(3*width);
 		Vec3f aux;
@@ -251,7 +253,7 @@ void render(const std::vector<Sphere> &spheres)
 		        aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
 	            	*pixel = aux;
 		    }
-	            MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
+	            MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
 	            i_row++;
 		}
 		while (recv < height){
@@ -262,7 +264,7 @@ void render(const std::vector<Sphere> &spheres)
 	                aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
 	                *pixel = aux;
 		    }
-	            MPI_Send(&height, 1, MPI_INT, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
+	            MPI_Send(&height, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
 		}
 	
 	    // Save result to a PPM image (keep these flags if you compile under Windows)
@@ -279,17 +281,33 @@ void render(const std::vector<Sphere> &spheres)
     }else{
         std::vector<float> row_pixel(3*width);
         int irow = 0;
-        while (MPI_Recv(&irow, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status ), (irow < height)) {
-                for ( int j = 0; j < width; j++) {
-		    float xx = (2 * ((j + 0.5) * invWidth) - 1) * angle * aspectratio;
-            	    float yy = (1 - 2 * ((irow + 0.5) * invHeight)) * angle;
-                    Vec3f raydir(xx, yy, -1);
-            	    raydir.normalize();
-		    Vec3f res = trace(Vec3f(0), raydir, spheres, 0);
-            	    row_pixel[3*j] = res.x;
-		    row_pixel[(3*j)+1] = res.y;
-		    row_pixel[(3*j)+2] = res.z;
-                }
+        while (MPI_Recv(&irow, 1, MPI_INT, 0, 101, MPI_COMM_WORLD, &status ), (irow < height)) {
+
+		int num_cpus = std::thread::hardware_concurrency();
+		std::vector<std::thread> threads; 
+		threads.reserve(num_cpus);
+		int sz = width / num_cpus;
+		int rest = width % num_cpus;
+		if (rest > 0) sz += 1;
+		auto compute = [width, height, invWidth, invHeight, angle, aspectratio, spheres, &row_pixel, irow] (int start, int size) -> void {
+					for (int j = start; j < start + size; ++j){
+					    float xx = (2 * ((j + 0.5) * invWidth) - 1) * angle * aspectratio;
+				    	    float yy = (1 - 2 * ((irow + 0.5) * invHeight)) * angle;
+					    Vec3f raydir(xx, yy, -1);
+				    	    raydir.normalize();
+					    Vec3f res = trace(Vec3f(0), raydir, spheres, 0);
+					    //maybe as j is already atomic this wont be a prolem, should check later
+				    	    row_pixel[3*j] = res.x;
+					    row_pixel[(3*j)+1] = res.y;
+					    row_pixel[(3*j)+2] = res.z;
+					}
+				};
+		for (int p = 0; p < num_cpus; ++p){
+			int size = ( p >= rest ? sz : sz - 1);
+			threads.push_back(std::thread(compute, s, size));
+		}
+		for (auto& t : threads) t.join();
+
                 MPI_Send(row_pixel.data(), 3*width, MPI_FLOAT, 0, 101, MPI_COMM_WORLD);
         }
     } 
@@ -311,6 +329,20 @@ void render(const std::vector<Sphere> &spheres)
     }
 
     for ( auto& t : threads ) t.join();
+
+    auto iterate  = [&genNorm,&genAngle,maxIter,&iSample, width, height, &image](){
+    	while(iSample>0) {
+	    std::complex<float> c = std::polar( genNorm(), genAngle() );		      
+	    Complex c0{c.real(),c.imag()};
+	    if ( test_mandelbrot_divergent( maxIter, c0 ) == true ) {
+	    	// Calcul de l'orbite si la suite diverge :
+		comp_mandelbrot_orbit( maxIter, c0, width, height, image );
+		--iSample;
+	    } 
+	}
+    };
+
+
     // ending local parallelism
 */
 
