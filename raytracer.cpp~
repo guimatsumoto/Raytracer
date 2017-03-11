@@ -242,12 +242,10 @@ void render(const std::vector<Sphere> &spheres)
 
     // changes start here ---------------------------------------------------------------------
     int numtasks, rank, provided;
-    //MPI_Init(0, 0);
     MPI_Init_thread(0, 0, MPI_THREAD_SERIALIZED, &provided);
     MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);	
     MPI_Status status;
-    //MPI_Bcast(&spheres, );
 
     std::vector<int> pixels(width*height);
     if (rank == 0){
@@ -309,15 +307,15 @@ void render(const std::vector<Sphere> &spheres)
         int irow = 0;
 	//printf("escravo n: %d", rank);
         while (MPI_Recv(&irow, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status ), (irow < height)) {
-                for ( int j = 0; j < 3*width; j += 3) {
+                for ( int j = 0; j < width; j++) {
 		    float xx = (2 * ((j + 0.5) * invWidth) - 1) * angle * aspectratio;
             	    float yy = (1 - 2 * ((irow + 0.5) * invHeight)) * angle;
                     Vec3f raydir(xx, yy, -1);
             	    raydir.normalize();
 		    Vec3f res = trace(Vec3f(0), raydir, spheres, 0);
-            	    row_pixel[j] = res.x;
-		    row_pixel[j+1] = res.y;
-		    row_pixel[j+2] = res.z;
+            	    row_pixel[3*j] = res.x;
+		    row_pixel[(3*j)+1] = res.y;
+		    row_pixel[(3*j)+2] = res.z;
                 }
 		//printf("rank %d enviou dados\n", rank);
                 MPI_Send(row_pixel.data(), 3*width, MPI_FLOAT, 0, 101, MPI_COMM_WORLD);
