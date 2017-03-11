@@ -243,7 +243,7 @@ void render(const std::vector<Sphere> &spheres)
     // changes start here ---------------------------------------------------------------------
     int numtasks, rank, provided;
     //MPI_Init(0, 0);
-    MPI_Init_thread(0, 0, MPI_THREAD_MULTIPLE, &provided);
+    MPI_Init_thread(0, 0, MPI_THREAD_SERIALIZED, &provided);
     MPI_Comm_size(MPI_COMM_WORLD, &numtasks);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);	
     MPI_Status status;
@@ -251,41 +251,42 @@ void render(const std::vector<Sphere> &spheres)
 
     std::vector<int> pixels(width*height);
     if (rank == 0){
-	int recv = 0;
+		int recv = 0;
     	int i_row = 0;
-	//printf("%d\n", numtasks);
-	for (int p = 1; p < numtasks; ++p){
-	    //printf("aqui1\n");
-	    MPI_Send(&i_row, 1, MPI_INT, p, 101, MPI_COMM_WORLD);
-	    ++i_row;	
-	}
-	std::vector<float> row_pixels(3*width+1);
-	Vec3f aux;
-	while(i_row < height){
-	    //printf("aqui2\n");
-	    MPI_Recv(row_pixels.data(), 3*width+1, MPI_FLOAT, MPI_ANY_SOURCE, 
-                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-	    ++recv;
-            //int row = row_pixels[3*width];
-            for ( int j = 0; j < 3*width; j+=3, ++pixel )
-	        aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
-                *pixel = aux;
-            MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
-            ++i_row ;
-	}
-	//int p = 1;
-	while (recv < height+1){
-	    //printf("aqui3\n");
-	    MPI_Recv(row_pixels.data(), 3*width+1, MPI_FLOAT, MPI_ANY_SOURCE, 
-                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-	    ++recv;
-            //int row = row_pixels[3*width];
-            for ( int j = 0; j < 3*width; j+=3, ++pixel )
-                aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
-                *pixel = aux;
-            MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
-            //++p;
-	}
+		printf("%d\n", numtasks);
+		int p = 1;
+		for ( ; p < numtasks; ++p){
+	    	//printf("aqui1\n");
+	    	MPI_Send(&i_row, 1, MPI_INT, p, 101, MPI_COMM_WORLD);
+	    	++i_row;	
+		}
+		std::vector<float> row_pixels(3*width+1);
+		Vec3f aux;
+		while(i_row < height){
+		    //printf("aqui2\n");
+		    MPI_Recv(row_pixels.data(), 3*width+1, MPI_FLOAT, MPI_ANY_SOURCE, 
+	                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+		    ++recv;
+	            //int row = row_pixels[3*width];
+	            for ( int j = 0; j < 3*width; j+=3, ++pixel )
+		        aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
+	                *pixel = aux;
+	            MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
+	            ++i_row ;
+		}
+		//int p = 1;
+		while (recv < height+1){
+		    //printf("aqui3\n");
+		    MPI_Recv(row_pixels.data(), 3*width+1, MPI_FLOAT, MPI_ANY_SOURCE, 
+	                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+		    ++recv;
+	            //int row = row_pixels[3*width];
+	            for ( int j = 0; j < 3*width; j+=3, ++pixel )
+	                aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
+	                *pixel = aux;
+	            	MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
+	            	//++p;
+				}	
     }else{
         std::vector<float> row_pixel(3*width+1);
         //
