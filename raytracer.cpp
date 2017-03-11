@@ -249,9 +249,12 @@ void render(const std::vector<Sphere> &spheres)
 		    MPI_Recv(row_pixels.data(), 3*width, MPI_FLOAT, MPI_ANY_SOURCE, 
 	                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 		    recv++;
-	            for ( int j = 0; j < 3*width; j+=3, pixel++ ){
-		        aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
-	            	*pixel = aux;
+	            for ( int j = 0; j < width; ++j){
+		        aux = Vec3f(row_pixels[3*j], row_pixels[3*j+1], row_pixels[3*j+2]);
+			*((Vec3f *)pixel + status.MPI_TAG*width + j) = aux;	            	
+			//*(pixel + status.MPI_TAG*width*sizeof(*image) + j*sizeof(*image)) = aux;
+			//(*pixel + status.MPI_TAG * width) = aux;
+			//memcpy(pixel + status.MPI_TAG*width*sizeof(*image) + j*sizeof(*image), &aux, sizeof(*image));
 		    }
 	            MPI_Send(&i_row, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
 	            i_row++;
@@ -260,9 +263,12 @@ void render(const std::vector<Sphere> &spheres)
 		    MPI_Recv(row_pixels.data(), 3*width, MPI_FLOAT, MPI_ANY_SOURCE, 
 	                     MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 		    recv++;
-	            for ( int j = 0; j < 3*width; j+=3, ++pixel ){
-	                aux = Vec3f(row_pixels[j], row_pixels[j+1], row_pixels[j+2]);
-	                *pixel = aux;
+	            for ( int j = 0; j < width; ++j){
+	                aux = Vec3f(row_pixels[3*j], row_pixels[3*j+1], row_pixels[3*j+2]);
+			*((Vec3f *)pixel + status.MPI_TAG*width + j) = aux;	                
+			//*(pixel + status.MPI_TAG*width*sizeof(Vec3f) + j*sizeof(Vec3f)) = aux;
+			//(*pixel + status.MPI_TAG * width) = aux;
+			//memcpy(image + status.MPI_TAG*width*sizeof(*image) + j*sizeof(*image), &aux, sizeof(*image));
 		    }
 	            MPI_Send(&height, 1, MPI_INT, status.MPI_SOURCE, 101, MPI_COMM_WORLD);
 		}
@@ -302,13 +308,15 @@ void render(const std::vector<Sphere> &spheres)
 					    row_pixel[(3*j)+2] = res.z;
 					}
 				};
+		int s = 0;
 		for (int p = 0; p < num_cpus; ++p){
 			int size = ( p >= rest ? sz : sz - 1);
 			threads.push_back(std::thread(compute, s, size));
+			s += size;
 		}
 		for (auto& t : threads) t.join();
 
-                MPI_Send(row_pixel.data(), 3*width, MPI_FLOAT, 0, 101, MPI_COMM_WORLD);
+                MPI_Send(row_pixel.data(), 3*width, MPI_FLOAT, 0, irow, MPI_COMM_WORLD);
         }
     } 
   
